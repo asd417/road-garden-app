@@ -1,0 +1,30 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-feature android:name="android.hardware.type.automotive" android:required="true" />
+    <!-- AAOS 표준: 속도·충전 상태(런타임 요청 필요), 기어·주차 브레이크 -->
+    <uses-permission android:name="android.car.permission.CAR_SPEED" />
+    <uses-permission android:name="android.car.permission.CAR_POWERTRAIN" />
+    <uses-permission android:name="android.car.permission.CAR_ENERGY" />
+    <uses-permission android:name="android.car.permission.CAR_ENERGY_PORTS" />
+    <!-- 날씨: 현재 위치로 날씨 API 조회 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Pleos Vehicle SDK: Brake·Odometer / EvBattery / Wiper -->
+    <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
+    <uses-permission android:name="pleos.car.permission.CAR_ENERGY" />
+    <uses-permission android:name="pleos.car.permission.CAR_WINDOWS" />
+    <!-- 칭찬 음성: 설치된 TTS 엔진을 찾을 수 있게 (Android 11+ 패키지 가시성) -->
+    <queries>
+        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
+    </queries>
+    <application android:label="Road Garden">
+        <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|screenLayout|density">
+            <!-- 주행 중에도 앰비언트 정원을 보여 줌 (주행 중엔 터치·텍스트·음성 없음). 없으면 플랫폼이 가림 -->
+            <meta-data android:name="distractionOptimized" android:value="true" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

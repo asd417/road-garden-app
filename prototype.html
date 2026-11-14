@@ -1,0 +1,992 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>로드 가든 프로토타입</title>
+<style>
+  body{margin:0;font-family:system-ui,'Malgun Gothic',sans-serif;background:#111;color:#eee;display:flex;gap:16px;padding:16px;flex-wrap:wrap;align-items:flex-start}
+  #sim{width:290px;background:#1c1c1c;border-radius:12px;padding:12px;font-size:14px;box-sizing:border-box}
+  #sim h2{font-size:15px;margin:4px 0 8px}
+  #demoNote{background:#ffab00;color:#1c1c1c;font-weight:700;font-size:13px;padding:6px 8px;border-radius:6px;margin-bottom:8px;text-align:center}
+  #sim label{display:flex;justify-content:space-between;align-items:center;margin:6px 0;gap:8px}
+  #sim .row{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+  #sim button{padding:6px 10px;border-radius:6px;border:0;background:#444;color:#eee;cursor:pointer}
+  #badge{display:inline-block;padding:2px 8px;border-radius:8px;background:#2e7d32}
+  #log{height:170px;overflow:auto;font-size:12px;background:#000;padding:6px;border-radius:6px;color:#9c9;white-space:pre-wrap}
+  #screen{position:relative;flex:1;min-width:320px;max-width:960px;aspect-ratio:16/9;border-radius:16px;overflow:hidden;transition:background 2s,filter 2s}
+  #garden{position:absolute;inset:0}
+  #garden canvas{display:block;width:100%;height:100%}
+  #sky{position:absolute;top:5%;right:5%;font-size:52px}
+  #fx,#deco{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .ico{width:1em;height:1em;vertical-align:-0.15em}
+  .ico.drop{width:1.1em;height:1.1em;vertical-align:-0.2em}
+  #hud{position:absolute;top:0;left:0;right:0;padding:12px 16px;display:flex;justify-content:space-between;background:rgba(0,0,0,.35);font-size:18px}
+  #panel{position:absolute;bottom:0;left:0;right:0;padding:10px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;background:rgba(0,0,0,.4)}
+  #panel button{font-size:16px;padding:10px 14px;border-radius:10px;border:0;background:#2e7d32;color:#fff;cursor:pointer}
+  #subtitle{position:absolute;bottom:72px;left:8%;right:8%;text-align:center;font-size:20px;text-shadow:0 1px 4px #000}
+  #ambientIcons{position:absolute;top:14px;left:18px;font-size:26px;opacity:.75}
+  #block{position:absolute;inset:0;display:none}
+  .ambient #hud,.ambient #panel,.ambient #subtitle,.park #panel{display:none} /* 버튼은 충전 중 꾸미기뿐 */
+  .ambient #block{display:block}
+  .full #ambientIcons{display:none}
+  /* 데모 촬영용 (#demo=1): 시뮬레이터 숨기고 차량 화면만 꽉 차게 */
+  body.demo{padding:0;background:#000}
+  body.demo #sim{display:none}
+  body.demo #screen{max-width:none;border-radius:0}
+  /* 디버그 패널 (#debug=1, 앱 debug 빌드): 🐞 버튼으로 시뮬레이터를 차량 화면 위에 띄운다 */
+  #dbgBtn,#dbgVars{display:none}
+  body.debug #dbgVars{display:block}
+  body.demo.debug #dbgBtn{display:block;position:fixed;bottom:8px;right:8px;z-index:20;font-size:18px;color:#ffab00;padding:6px 10px;border-radius:10px;border:0;background:rgba(0,0,0,.6);cursor:pointer}
+  body.demo.debug.dbg-open #sim{display:block;position:fixed;top:8px;right:8px;z-index:20;max-height:calc(100vh - 72px);overflow:auto;background:rgba(28,28,28,.92)}
+</style>
+</head>
+<body>
+
+<!-- 차량 시뮬레이터: 실제 앱에서는 Pleos/AAOS API가 이 값들을 준다 -->
+<div id="sim">
+  <div id="demoNote">시연용 메뉴 · 실제 차량용 앱(release)에는 없습니다</div>
+  <h2>차량 시뮬레이터 <span id="badge"></span></h2>
+  <label>정원 화면 (디버그) <select id="view"><option value="emblem">엠블럼 정원</option><option value="pot">기존 화분</option><option value="flower">꽃·잎 모델</option></select></label>
+  <label>속도 <span id="speedVal">0</span> km/h</label>
+  <input id="speed" type="range" min="0" max="120" value="0" style="width:100%">
+  <div class="row">
+    <button data-dv="25">급가속</button><button data-dv="-25">급제동</button>
+    <label style="margin:0"><input id="auto" type="checkbox">부드러운 자동 주행</label>
+  </div>
+  <label>기어 <select id="gear"><option>P</option><option selected>D</option><option>N</option><option>R</option></select></label>
+  <label>브레이크 페달 <input id="brake" type="checkbox"></label>
+  <label>주차 브레이크 <input id="pbrake" type="checkbox"></label>
+  <label>EV 충전 중 <input id="charging" type="checkbox"></label>
+  <label>와이퍼 작동 <input id="wiper" type="checkbox"></label>
+  <label>회생제동 <input id="regen" type="checkbox" checked></label>
+  <label>엠블럼 정원 성장 <span id="egVal">0%</span></label>
+  <input id="eg" type="range" min="0" max="1" step="0.01" value="0" style="width:100%">
+  <div style="font-size:12px;color:#999">부드러운 주행 ↑ · 급가감속 ↓ · 드래그로 직접 조절</div>
+  <label>나비 방문 (곤충 예시) <input id="bfly" type="checkbox"></label>
+  <h2>위치 · 날씨 API</h2>
+  <label>날씨 <select id="weather"><option>맑음</option><option>흐림</option><option>비</option><option>눈</option></select></label>
+  <label>외기온도 <input id="temp" type="number" value="18" style="width:60px"> ℃</label>
+  <div>보류된 안내: <span id="pending">0</span>개</div>
+  <div id="dbgVars">
+    <h2>내부 변수 (디버그)</h2>
+    <label>수동 조작 (차량 값 무시) <input id="manual" type="checkbox"></label>
+    <label>물방울 <input id="vDrops" type="number" min="0" style="width:70px"></label>
+    <label>급가감속 횟수 <input id="vHarsh" type="number" min="0" style="width:70px"></label>
+    <label>잎 처짐 (0~1) <input id="vWilt" type="number" min="0" max="1" step="0.1" style="width:70px"></label>
+    <label>연속 안전운전 (일) <input id="vStreak" type="number" min="0" max="30" style="width:70px"></label>
+  </div>
+  <h2>로그</h2>
+  <div id="log"></div>
+</div>
+
+<!-- 인포테인먼트 화면 -->
+<div id="screen">
+  <div id="sky"></div>
+  <canvas id="deco"></canvas><!-- 충전 중 꾸미기: 배경 소품 (별·반딧불·물결·꽃잎) -->
+  <div id="garden"></div>
+  <canvas id="fx"></canvas><!-- 비·눈 파티클 -->
+  <div id="ambientIcons"></div>
+  <div id="hud"></div>
+  <div id="subtitle"></div>
+  <div id="panel">
+    <button id="decor">🎨 정원 꾸미기</button>
+  </div>
+  <div id="block"></div><!-- 주행 중 터치 차단 -->
+</div>
+<button id="dbgBtn">🐞 시연용</button>
+
+<script src="logo_mesh.js"></script><!-- window.LOGO_OBJ: 현대 엠블럼 메시 -->
+<script src="flower_model.js"></script><!-- window.createLilies: 꽃 4종 모델 (인스턴싱), window.FLOWER_KINDS -->
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const $ = id => document.getElementById(id);
+const LABEL = {drive:'주행 중', wait:'신호 대기', park:'주차', charge:'충전 중'};
+const BG = {맑음:'linear-gradient(#7ec8f0,#d8f0c0)', 흐림:'linear-gradient(#8a9aa8,#b8c4a8)', 비:'linear-gradient(#4a5866,#7a8a70)', 눈:'linear-gradient(#c8d4e0,#f0f4f8)'};
+// 흰색 단색 아이콘 (물방울·날씨)
+const svg = body => `<svg class="ico" viewBox="0 0 24 24" fill="#fff" stroke="#fff" stroke-width="2" stroke-linecap="round">${body}</svg>`;
+const CLOUD = y => `<path stroke="none" d="M7 ${18 - y}h10.5a4 4 0 0 0 .4-8 6 6 0 0 0-11.5 1.5A3.3 3.3 0 0 0 7 ${18 - y}z"/>`;
+const DROP = svg('<path stroke="none" d="M12 2.5C9 7 5.5 10.6 5.5 14.5a6.5 6.5 0 0 0 13 0C18.5 10.6 15 7 12 2.5z"/>').replace('class="ico"', 'class="ico drop"');
+const SKY = {
+  맑음: svg('<circle cx="12" cy="12" r="4.5" stroke="none"/><path fill="none" d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/>'),
+  흐림: svg(CLOUD(0)),
+  비: svg(CLOUD(4) + '<path fill="none" d="M8 17.5l-1 3M12 17.5l-1 3M16 17.5l-1 3"/>'),
+  눈: svg('<path fill="none" d="M12 2v20M3.3 7l17.4 10M3.3 17L20.7 7M9.5 3.5L12 6l2.5-2.5M9.5 20.5L12 18l2.5 2.5"/>'),
+};
+const POTS = [null, '#ece6da', '#2f5d8a', '#c4683f']; // null = 흙더미만
+
+const S = {
+  state: null, lastSpeed: 0, drops: 0, smoothTicks: 0, harsh: 0, wilt: 0,
+  // 화분 정원(디버그)용 식물. leaf: 잎 기본색, edge: 잎 가장자리색, wf: 잎 폭 배율
+  plants: [{name:'새싹', color:'#f9a825', leaf:'#4f9216', edge:'#93c62c', wf:1, growth:0.15}], extras: [],
+  rainDone: false, pot: 0,
+  queue: [], speaking: null, gen: 0, gardenKey: '',
+  eg: 0, // 엠블럼 정원 목표 성장도 (0~1)
+  tripDrops: 0, tripHarsh: 0, // 지난 정차 이후 모은 물방울·급가감속 (도착 안내용)
+  days: {}, today: '', // 운전한 날별 급가감속 횟수 (나비: 일주일 연속 0회), harsh는 오늘 횟수
+  theme: 0, // 충전 중 꾸미기로 고른 정원 배경
+  restricted: false, // 플랫폼의 주행 중 UX 제한
+};
+
+// 정원 저장: 시동을 다시 걸어도(앱을 다시 켜도) 이어서 자람
+const SAVE_KEYS = ['eg', 'drops', 'harsh', 'wilt', 'days', 'today', 'theme'];
+function save(){ try { localStorage.setItem('roadGarden', JSON.stringify({...Object.fromEntries(SAVE_KEYS.map(k => [k, S[k]])), weather: $('weather').value, temp: $('temp').value})); } catch {} }
+function load(){ // 마지막 날씨도 복원 (시동 직후 네트워크가 없을 때)
+  try { const d = JSON.parse(localStorage.getItem('roadGarden')) || {}; Object.assign(S, d); if (d.weather){ $('weather').value = d.weather; $('temp').value = d.temp; } } catch {}
+}
+
+const dayKey = (d = new Date()) => d.toLocaleDateString('sv'); // YYYY-MM-DD (현지 날짜)
+// 연속 안전운전: 운전한 날을 최근부터 세어 급가감속이 처음 나온 날 직전까지 (오늘 포함)
+function safeStreak(){ let n = 0; for (const k of Object.keys(S.days).sort().reverse()){ if (S.days[k]) break; n++; } return n; }
+function setStreak(n){ // 디버그: 최근 n일을 급가감속 0회로 채움
+  S.days = {};
+  for (let i = 0, d = new Date(); i < n; i++, d.setDate(d.getDate() - 1)) S.days[dayKey(d)] = 0;
+}
+
+function log(t){ $('log').textContent = new Date().toLocaleTimeString() + ' ' + t + '\n' + $('log').textContent; }
+
+// 상태 판정 (기획안 4장)
+function vehicleState(){
+  if ($('charging').checked) return 'charge';
+  if ($('gear').value === 'P' || $('pbrake').checked) return 'park';
+  if (+$('speed').value > 0) return 'drive';
+  return 'wait'; // ponytail: 속도 0이면 브레이크 여부와 관계없이 신호 대기 (오토 홀드·N단 포함)
+}
+
+// 음성: 주차·충전 때만 큐를 읽고, 출발하면 끊고 남긴다
+function utter(text, done){
+  const g = S.gen;
+  S.speaking = text;
+  if (S.state === 'park' || S.state === 'charge') $('subtitle').textContent = text;
+  const end = () => {
+    if (g !== S.gen) return; // 중단된 발화
+    S.speaking = null; $('subtitle').textContent = '';
+    done && done(); speakNext();
+  };
+  if (nativeTTS){ // 앱(WebView): Android TTS
+    const id = String(++ttsSeq); ttsDone[id] = end;
+    if (nativeTTS.speak(text, id)) return;
+    delete ttsDone[id];
+  }
+  if (!('speechSynthesis' in window)) return setTimeout(end, Math.max(2500, text.length * 150)); // 음성이 없으면 읽을 시간만큼 자막 유지
+  const u = new SpeechSynthesisUtterance(text);
+  voice = voice || pickVoice();
+  if (voice) u.voice = voice;
+  u.lang = 'ko-KR'; u.rate = 1.05; u.pitch = 1.15; // 살짝 빠르고 밝게
+  u.onend = end; u.onerror = end;
+  speechSynthesis.speak(u);
+}
+// 자연스러운 한국어 음성 우선: Edge 신경망 음성(SunHi 등 "Natural/Online") > Google > 기본
+// ponytail: 브라우저에 깔린 음성 중에서 고르는 것뿐, 실차에선 Pleos TextToSpeech SDK 음성으로 교체
+let voice = null;
+const nativeTTS = window.AndroidTTS, ttsDone = {}; let ttsSeq = 0; // 앱: Kotlin이 발화 끝을 roadGarden.spoken(id)로 알림
+function pickVoice(){
+  const ko = speechSynthesis.getVoices().filter(v => /^ko/i.test(v.lang));
+  return ko.find(v => /Natural|Online/i.test(v.name)) || ko.find(v => /Google/i.test(v.name)) || ko[0] || null;
+}
+if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => { voice = pickVoice(); };
+const pick = a => a[Math.floor(Math.random() * a.length)]; // 같은 상황에도 대사를 조금씩 다르게
+function say(text){ S.queue.push(text); log('안내 대기: ' + text); speakNext(); }
+function speakNext(){
+  if (S.speaking || !S.queue.length || !(S.state === 'park' || S.state === 'charge')) return;
+  utter(S.queue[0], () => S.queue.shift());
+}
+function interrupt(){
+  if (!S.speaking) return;
+  S.gen++; S.speaking = null; $('subtitle').textContent = '';
+  if (nativeTTS) nativeTTS.stop();
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  log('출발 → 음성 중단, 남은 안내는 다음 정차 때');
+}
+
+function setState(st){
+  if (st === S.state) return;
+  S.state = st; log('상태: ' + LABEL[st]);
+  if (st === 'drive') interrupt();
+  else if (st === 'wait') { interrupt(); if (S.tripDrops) utter(pick([`물방울 ${S.tripDrops}개째예요!`, `벌써 물방울 ${S.tripDrops}개!`])); } // 짧은 한마디, 화면 텍스트 없음
+  else {
+    // 주차·충전: 모은 물방울을 자동으로 정원에 주고 이번 주행을 칭찬
+    if (S.drops){
+      const n = S.drops;
+      water();
+      say(`안전운전으로 물방울을 ${n}개 모아서 정원에 줬어요!`
+        + (S.tripHarsh ? ' 조금만 더 부드럽게 달리면 꽃이 더 활짝 필 거예요!' : pick([' 오늘 운전 최고예요!', ' 정원이 정말 좋아해요!']))
+        + (S.eg >= 0.85 ? ' 와, 꽃이 활짝 피었어요!' : ''));
+    }
+    S.tripDrops = S.tripHarsh = 0;
+    speakNext();
+  }
+}
+
+// 물 주기: 모아 둔 물방울만큼 정원이 자람 (날씨·기온 반영). 주차·충전하면 자동으로
+function water(){
+  S.plants.forEach(p => p.growth += S.drops * 0.03 * sunFactor() / S.plants.length);
+  S.eg = Math.min(1, S.eg + S.drops * 0.01 * sunFactor()); // 엠블럼 정원도 함께 자람
+  S.drops = 0; S.wilt = Math.max(0, S.wilt - 0.5);
+}
+function sunFactor(){
+  let f = {맑음:1.5, 흐림:1, 비:1, 눈:0.5}[$('weather').value];
+  const t = +$('temp').value;
+  if (t < 0) f *= 0.5; else if (t > 35) f *= 0.7;
+  return f;
+}
+
+// ───────── 3D 정원 (three.js) ─────────
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+$('garden').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+const camera = new THREE.PerspectiveCamera(32, 16/9, 0.1, 100);
+const controls = new OrbitControls(camera, renderer.domElement);
+Object.assign(controls, {enablePan:false, enableDamping:true, minPolarAngle:0.6, maxPolarAngle:1.45, minDistance:2.5, maxDistance:14});
+
+scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x7a6a50, 2.0));
+const fill = new THREE.DirectionalLight(0xe8f4ff, 0.9); // 카메라 쪽 보조광: 그늘진 잎이 검게 죽지 않게
+fill.position.set(-3, 2.5, 5);
+scene.add(fill);
+const sun = new THREE.DirectionalLight(0xfff1dc, 1.5);
+sun.position.set(3, 6, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, {left:-7, right:7, top:7, bottom:-7});
+sun.shadow.radius = 4;
+sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.02; // 얇은 잎의 자기 그림자(shadow acne) 방지
+scene.add(sun);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.ShadowMaterial({opacity:0.22}));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+scene.add(ground);
+
+new ResizeObserver(() => {
+  const {clientWidth:w, clientHeight:h} = $('garden');
+  renderer.setSize(w, h, false);
+  for (const c of [camera, eCam, fCam]){ c.aspect = w / h; c.updateProjectionMatrix(); }
+}).observe($('garden'));
+
+// 흙 알갱이 텍스처
+const soilTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const x = c.getContext('2d');
+  x.fillStyle = '#3b3431'; x.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 9000; i++){
+    const l = 15 + Math.random() * 35;
+    x.fillStyle = `hsl(20,8%,${l}%)`;
+    x.fillRect(Math.random() * 512, Math.random() * 512, 1 + Math.random() * 2.5, 1 + Math.random() * 2.5);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(3, 3); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+const soilMat = new THREE.MeshStandardMaterial({map:soilTex, bumpMap:soilTex, bumpScale:3, roughness:1});
+const stemMat = new THREE.MeshStandardMaterial({color:0x4d7f2a, roughness:0.55});
+
+const hash = (x, y, z) => { const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453; return s - Math.floor(s); };
+function vnoise(x, y, z){ // 3D value noise
+  const X = Math.floor(x), Y = Math.floor(y), Z = Math.floor(z), s = t => t * t * (3 - 2 * t);
+  const u = s(x - X), v = s(y - Y), w = s(z - Z), L = (a, b, t) => a + (b - a) * t, h = (i, j, k) => hash(X + i, Y + j, Z + k);
+  return L(L(L(h(0,0,0), h(1,0,0), u), L(h(0,1,0), h(1,1,0), u), v), L(L(h(0,0,1), h(1,0,1), u), L(h(0,1,1), h(1,1,1), u), v), w);
+}
+
+function makeMound(){
+  const g = new THREE.SphereGeometry(1, 128, 48, 0, Math.PI * 2, 0, Math.PI / 2);
+  const p = g.attributes.position, v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++){
+    v.fromBufferAttribute(p, i);
+    const r = 1 + 0.14 * (vnoise(v.x * 2.5, v.y * 2.5, v.z * 2.5) - 0.5) + 0.06 * (vnoise(v.x * 9, v.y * 9, v.z * 9) - 0.5) + 0.025 * (hash(v.x, v.y, v.z) - 0.5);
+    p.setXYZ(i, v.x * r * 0.72, v.y * r * 0.5, v.z * r * 0.72);
+  }
+  // 구면 UV는 꼭대기(극점)에서 텍스처가 방사형으로 뭉개진다 → 위에서 내려다본 평면 투영 UV로 교체
+  const uv = g.attributes.uv;
+  for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) * 1.2, p.getZ(i) * 1.2 + p.getY(i) * 0.8);
+  g.computeVertexNormals();
+  const m = new THREE.Mesh(g, soilMat);
+  m.castShadow = m.receiveShadow = true;
+  return m;
+}
+
+// 잎: 길이 +Y, 폭 Z, 위쪽 면 = -X (피벗을 Z축으로 기울이면 수평이 됨)
+function makeLeaf(L, W, c1, c2){
+  const nu = 28, nv = 10, pos = [], col = [], idx = [];
+  const base = new THREE.Color(c1), edge = new THREE.Color(c2), rib = new THREE.Color(c2).lerp(new THREE.Color('#f4f8d0'), 0.4), c = new THREE.Color();
+  const pet = 0.12 * L; // 잎자루 길이
+  for (let i = 0; i <= nu; i++){
+    const u = i / nu, w = W * Math.pow(Math.sin(Math.PI * Math.pow(u, 0.7)), 0.85);
+    for (let j = 0; j <= nv; j++){
+      const v = j / nv * 2 - 1, a = Math.abs(v);
+      const serr = a === 1 ? 1 + 0.08 * Math.abs(Math.sin(u * 55)) : 1; // 톱니 가장자리
+      pos.push(-a * w * 0.35 + 0.28 * L * u * u, pet + u * L, v * w * serr);
+      c.copy(base).lerp(edge, Math.pow(a, 1.4) * 0.8 + u * 0.2);
+      if (a < 0.12) c.lerp(rib, 0.6);
+      col.push(c.r, c.g, c.b);
+      if (i < nu && j < nv){ const k = i * (nv + 1) + j, k2 = k + nv + 1; idx.push(k, k + 1, k2, k2, k + 1, k2 + 1); } // 앞면 법선 = 잎 윗면(-X)
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx); g.computeVertexNormals();
+  const blade = new THREE.Mesh(g, new THREE.MeshStandardMaterial({vertexColors:true, side:THREE.DoubleSide, roughness:0.75, envMapIntensity:0.5, emissive:new THREE.Color(c1), emissiveIntensity:0.18})); // emissive: 빛이 잎을 투과하는 느낌
+  const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.012, pet, 8), stemMat);
+  stalk.position.y = pet / 2;
+  const leaf = new THREE.Group(); leaf.add(blade, stalk);
+  leaf.traverse(o => o.castShadow = true);
+  return leaf;
+}
+
+function makeStem(curve){
+  const seg = 48, rad = 10, g = new THREE.TubeGeometry(curve, seg, 0.034, rad, false);
+  const p = g.attributes.position, v = new THREE.Vector3(), ctr = new THREE.Vector3();
+  for (let i = 0; i <= seg; i++){
+    curve.getPointAt(i / seg, ctr);
+    const k = 1 - 0.6 * i / seg; // 위로 갈수록 가늘게
+    for (let j = 0; j <= rad; j++){
+      const n = i * (rad + 1) + j;
+      v.fromBufferAttribute(p, n).sub(ctr).multiplyScalar(k).add(ctr);
+      p.setXYZ(n, v.x, v.y, v.z);
+    }
+  }
+  g.computeVertexNormals();
+  const m = new THREE.Mesh(g, stemMat); m.castShadow = true;
+  return m;
+}
+
+function makeFlower(color){
+  const f = new THREE.Group(), mat = new THREE.MeshPhysicalMaterial({color, roughness:0.4, sheen:1, side:THREE.DoubleSide});
+  for (let i = 0; i < 6; i++){
+    const petal = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 8), mat);
+    petal.scale.set(0.11, 0.025, 0.055);
+    const a = i / 6 * Math.PI * 2;
+    petal.position.set(Math.cos(a) * 0.1, 0, Math.sin(a) * 0.1);
+    petal.rotation.set(0, -a, 0.3);
+    f.add(petal);
+  }
+  f.add(new THREE.Mesh(new THREE.SphereGeometry(0.045, 16, 12), new THREE.MeshStandardMaterial({color:0xf2c230, roughness:0.7})));
+  f.traverse(o => o.castShadow = true);
+  return f;
+}
+
+function makeMushroom(){
+  const m = new THREE.Group();
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.18, 16), new THREE.MeshStandardMaterial({color:0xf1e6d0, roughness:0.8}));
+  stem.position.y = 0.09;
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.12, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshPhysicalMaterial({color:0xb5462f, roughness:0.45, clearcoat:0.4}));
+  cap.scale.y = 0.75; cap.position.y = 0.17;
+  m.add(stem, cap); m.traverse(o => o.castShadow = true);
+  return m;
+}
+
+function makePlant(p){
+  const g = Math.min(p.growth, 1), size = 0.85 + 0.3 * g, H = 0.6 + g * 1.2;
+  const root = new THREE.Group(), pivots = [];
+  let y0 = 0;
+  if (POTS[S.pot]){
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 0.75, 0.75, 48), new THREE.MeshPhysicalMaterial({color:POTS[S.pot], roughness:0.35, clearcoat:0.6}));
+    pot.position.y = 0.375; pot.castShadow = pot.receiveShadow = true;
+    root.add(pot); y0 = 0.72;
+  }
+  const mound = makeMound(); mound.position.y = y0 - 0.06; root.add(mound); // 살짝 묻어서 열린 밑면 테두리가 안 보이게
+
+  const pts = [];
+  for (let k = 0; k <= 5; k++) pts.push(new THREE.Vector3(Math.sin(k * 1.3) * 0.04, y0 + 0.2 + H * k / 5, Math.cos(k * 1.7) * 0.04));
+  const curve = new THREE.CatmullRomCurve3(pts);
+  root.add(makeStem(curve));
+
+  const addLeaf = (t, phi, L, tilt) => {
+    const holder = new THREE.Group(), pivot = new THREE.Group();
+    holder.position.copy(curve.getPointAt(t)); holder.rotation.y = phi;
+    pivot.add(makeLeaf(L, 0.26 * L * p.wf, p.leaf, p.edge));
+    pivot.userData.tilt = tilt;
+    holder.add(pivot); root.add(holder); pivots.push(pivot);
+  };
+  const n = 2 + Math.floor(g * 6);
+  for (let k = 0; k < n; k++){
+    const t = 0.3 + 0.6 * k / n;
+    addLeaf(t, k * 2.4 + 0.6, 0.78 * size * (1 - 0.35 * t), 62 - 20 * t);
+  }
+  if (p.growth < 1){ addLeaf(1, 0.3, 0.3 * size, 18); addLeaf(1, 0.3 + Math.PI, 0.25 * size, 22); } // 꼭대기 새순 (꽃이 피면 꽃이 대신함)
+  if (p.growth >= 1){ const f = makeFlower(p.color); f.position.copy(curve.getPointAt(1)).add(new THREE.Vector3(0, 0.05, 0)); root.add(f); }
+  return {root, pivots};
+}
+
+let garden = new THREE.Group(), pivots = [], wiltNow = 0;
+scene.add(garden);
+function buildGarden(){
+  garden.traverse(o => { o.geometry?.dispose(); if (o.material && o.material !== soilMat && o.material !== stemMat) o.material.dispose(); });
+  scene.remove(garden);
+  garden = new THREE.Group(); pivots = [];
+  const n = S.plants.length, gap = 2.1;
+  S.plants.forEach((p, i) => {
+    const {root, pivots:pv} = makePlant(p);
+    root.position.x = (i - (n - 1) / 2) * gap;
+    root.rotation.y = i * 1.1;
+    garden.add(root); pivots.push(...pv);
+  });
+  S.extras.forEach((e, i) => {
+    const m = makeMushroom();
+    m.position.set((-(n - 1) / 2) * gap + 0.45 + i * 0.15, (POTS[S.pot] ? 0.72 : 0) + 0.27, 0.3);
+    garden.add(m);
+  });
+  scene.add(garden);
+  // 가장 큰 식물이 화면에 다 들어오게 카메라 맞춤
+  const top = (POTS[S.pot] ? 0.72 : 0) + 0.8 + Math.max(...S.plants.map(p => Math.min(p.growth, 1))) * 1.35;
+  controls.target.set(0, top * 0.5, 0);
+  camera.position.set(0, top * 0.5 + 1.6, Math.max(5, top * 2.4, n * gap * 1.5));
+  controls.update();
+}
+
+// ───────── 엠블럼 정원: 주행 중 앰비언트 화면 ─────────
+// 성장도 하나(0~1)로 전부 결정: 0~0.65 덩굴이 뻗으며 잎이 바로 뒤따라 채움 → ~0.55 꽃봉오리 → 1 만개
+// 덩굴은 처음엔 천천히 뻗어서, 성장도가 낮을 땐 짧은 덩굴에 잎이 빽빽하다
+const eScene = new THREE.Scene();
+eScene.environment = scene.environment;
+const eCam = new THREE.PerspectiveCamera(30, 16/9, 0.1, 100);
+eCam.position.set(0.5, -0.45, 6.6); eCam.lookAt(0, 0, 0);
+const eKey = new THREE.DirectionalLight(0xffffff, 1.6); eKey.position.set(-3, 4, 6);
+eScene.add(eKey, new THREE.HemisphereLight(0xffffff, 0x1a2a1a, 0.5));
+
+let seed = 7; // 고정 시드: 매번 같은 덩굴 배치
+const rnd = () => (seed = seed * 16807 % 2147483647) / 2147483647;
+const smooth = (a, b, x) => { const k = Math.min(1, Math.max(0, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
+
+let logo = null;
+if (window.LOGO_OBJ){ // 엠블럼: logo.obj 메시를 덩굴 좌표계(가로 4.0, 중심 원점)에 맞춘다
+  logo = new OBJLoader().parse(window.LOGO_OBJ);
+  const mat = new THREE.MeshPhysicalMaterial({color:0xf2f4f7, metalness:1, roughness:0.28, clearcoat:0.6, envMapIntensity:2.6});
+  logo.traverse(o => { if (o.isMesh) o.material = mat; });
+  // 원본 메시 전체의 범위로 구한 값 (보이는 면만 남겨 범위가 줄어도 위치가 바뀌지 않게 고정)
+  const k = 0.5630313483307982, c = new THREE.Vector3(0.0014, 1.0894, -0.02095);
+  logo.scale.setScalar(k); logo.position.copy(c).multiplyScalar(-k);
+  eScene.add(logo);
+  logo.updateMatrixWorld(true); // 덩굴 경로 계산의 레이캐스트용
+}
+// (x, y) 위치 앞뒤에 엠블럼 금속이 있는지
+const ray = new THREE.Raycaster(), rayO = new THREE.Vector3(), rayD = new THREE.Vector3(0, 0, -1);
+const overMetal = (x, y) => { if (!logo) return false; ray.set(rayO.set(x, y, 3), rayD); return ray.intersectObject(logo, true).length > 0; };
+
+// ───── 덩굴 잎 (vine leaf.png 참고): 손바닥 모양 5갈래 + 톱니 가장자리 + 잎맥 + 잎자루 ─────
+// 잎 좌표: 잎자루가 붙는 점 = 원점, 잎 끝 = +Y. 원점이 덩굴에 붙어 0에서 커지며 돋아난다
+const LEAF_LOBES = [[0, 0.62], [0.95, 0.55], [-0.95, 0.55], [1.9, 0.38], [-1.9, 0.38]]; // [각도(+Y 기준), 길이]
+const leafR = th => { // 각도 th 방향의 잎 가장자리까지 거리
+  let r = 0.32;
+  for (const [a, h] of LEAF_LOBES){ const d = (th - a + Math.PI * 3) % (Math.PI * 2) - Math.PI; r += h * Math.exp(-((d / 0.36) ** 2)); }
+  r *= 1 - 0.75 * Math.exp(-(((Math.abs(th) - Math.PI) / 0.35) ** 2)); // 밑동 홈 (잎자루 붙는 곳)
+  const f = ((th / (Math.PI * 2) * 46) % 1 + 1) % 1;
+  return r * (1 + 0.07 * (1 - f) ** 2); // 톱니
+};
+const leafTex = (() => { // 잎맥 텍스처: 가운데서 각 갈래로 굵은 맥 → 양옆 곁맥 → 잔맥
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const x = c.getContext('2d'), P = (px, py) => [256 + px * 256, 256 - py * 256];
+  x.fillStyle = '#5e9a2a'; x.fillRect(0, 0, 512, 512);
+  x.strokeStyle = 'rgba(190,225,120,0.16)'; x.lineWidth = 1; // 잔맥 그물
+  for (let i = 0; i < 2600; i++){ const a = Math.random() * 6.3, px = Math.random() * 512, py = Math.random() * 512; x.beginPath(); x.moveTo(px, py); x.lineTo(px + Math.cos(a) * 7, py + Math.sin(a) * 7); x.stroke(); }
+  x.lineCap = 'round';
+  const vein = (px, py, ang, len, w, depth) => {
+    const n = 8; let cx = px, cy = py;
+    for (let i = 1; i <= n; i++){
+      const t = i / n, nx = px + Math.sin(ang) * len * t, ny = py + Math.cos(ang) * len * t;
+      x.strokeStyle = `rgba(200,232,130,${0.8 - 0.35 * t})`; x.lineWidth = Math.max(0.6, w * (1 - 0.7 * t));
+      x.beginPath(); x.moveTo(...P(cx, cy)); x.lineTo(...P(nx, ny)); x.stroke();
+      cx = nx; cy = ny;
+      if (depth > 0 && i % 2 === 0 && i < n) for (const s of [-1, 1]) vein(nx, ny, ang + s * 0.75, len * (1 - t) * 0.6, w * 0.5, depth - 1);
+    }
+  };
+  for (const [a] of LEAF_LOBES) vein(0, 0, a, leafR(a) * 0.92, 7, 2);
+  for (const s of [-1, 1]) vein(0, 0, s * 2.5, 0.35, 3, 1); // 밑동 쪽 짧은 맥
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+})();
+const ivyGeo = (() => {
+  const S = 360, K = 12, pos = [], col = [], uv = [], idx = [];
+  for (let k = 0; k <= K; k++){
+    const rho = k / K;
+    for (let j = 0; j <= S; j++){
+      const th = -Math.PI + j / S * Math.PI * 2, rr = rho * leafR(th), px = Math.sin(th) * rr, py = Math.cos(th) * rr;
+      pos.push(px, py, -0.12 * rr * rr + 0.03 * rr * Math.sin(th * 5 + 1) + 0.012 * Math.sin(rr * 14)); // 오목 + 갈래 사이 물결
+      const l = 0.82 + 0.18 * rho; col.push(l, l, l * 0.95); // 가장자리일수록 밝게
+      uv.push(0.5 + 0.5 * px, 0.5 + 0.5 * py);
+      if (k < K && j < S){ const a = k * (S + 1) + j, b = a + S + 1; idx.push(a, b, a + 1, b, b + 1, a + 1); }
+    }
+  }
+  const blade = new THREE.BufferGeometry();
+  blade.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  blade.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  blade.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  blade.setIndex(idx);
+  const PET = 0.3; blade.translate(0, PET, 0); // 잎자루 길이만큼 띄움
+  const V = THREE.Vector3, stalk = new THREE.TubeGeometry(new THREE.QuadraticBezierCurve3(new V(0, 0, 0), new V(0.03, PET * 0.5, 0.06), new V(0, PET, 0)), 8, 0.018, 6);
+  stalk.deleteAttribute('normal'); // 합칠 두 지오메트리의 속성을 맞춤 (법선은 합친 뒤 계산)
+  const n = stalk.attributes.position.count;
+  stalk.setAttribute('color', new THREE.Float32BufferAttribute(new Array(n * 3).fill(0.85), 3));
+  stalk.setAttribute('uv', new THREE.Float32BufferAttribute(new Array(n * 2).fill(0.5), 2)); // 텍스처의 가운데 맥 색
+  const g = mergeGeometries([blade.toNonIndexed(), stalk.toNonIndexed()]);
+  g.scale(0.62, 0.62, 0.62); g.computeVertexNormals();
+  return g;
+})();
+const LEAF_C = ['#ffffff', '#dcefc8', '#c8e2a8', '#eefadc'].map(c => new THREE.Color(c)); // 잎마다 살짝 다른 색조
+const WILT_C = new THREE.Color('#c9a55a');
+const ivyMats = LEAF_C.map(c => new THREE.MeshStandardMaterial({color:c.clone(), map:leafTex, bumpMap:leafTex, bumpScale:1.5, vertexColors:true, roughness:0.55, side:THREE.DoubleSide}));
+const vineMat = new THREE.MeshStandardMaterial({color:0x5d7a2e, roughness:0.6});
+// 꽃 종류별 색 (FLOWER_KINDS 순서): 백합 분홍·상아·산호, 코스모스 자홍·분홍·흰, 별꽃 라벤더·보라·연라일락, 목련 크림·살구분홍·버터
+const FLOWER_PAL = [
+  ['#f27fa8', '#fff3ea', '#ff6f8e'],
+  ['#d9468a', '#f59bc0', '#fff2f6'],
+  ['#b48ae8', '#8a62d8', '#d8c2f5'],
+  ['#fff1dc', '#f5b4c4', '#ffd98a'],
+].map(p => p.map(c => new THREE.Color(c)));
+
+// 덩굴 경로 (엠블럼 좌표, 링 가로 반지름 2.0). 모두 엠블럼 안쪽에서 출발 → 로고 뒤에서 자라 나온다
+const VINES = [
+  [[-0.6,-0.45],[-1.3,-0.2],[-1.95,0.3],[-1.6,0.85],[-0.8,1.15],[0.2,1.2],[1.1,1.1],[1.75,0.85]],
+  [[0.2,-0.15],[-0.3,0.4],[-0.9,0.72],[-1.55,0.6],[-2.15,0.0],[-1.9,-0.7],[-1.2,-1.1],[-0.4,-1.2]],
+  [[0.45,0.1],[0.95,-0.4],[1.5,-0.72],[2.05,-0.3],[2.12,0.4],[1.5,0.98]],
+  [[-0.3,-0.25],[0.3,-0.75],[0.95,-1.1],[1.7,-1.1]],
+  [[0.0,0.3],[0.5,0.75],[1.0,0.97],[1.45,0.6],[1.9,0.1]],
+];
+const DEPTH = 0.24; // 로고 두께 ±0.13 바깥으로 지나가는 깊이
+const vines = [], ivy = [], blooms = [];
+const VINE_SPAN = 0.45, VINE_EASE = 1.8; // 덩굴 하나가 다 뻗는 데 걸리는 성장도, 초반 감속 정도
+const tipAt = (start, t) => start + VINE_SPAN * t ** (1 / VINE_EASE); // 덩굴 끝이 t 지점에 닿는 성장도
+VINES.forEach((pts, vi) => {
+  const start = vi * 0.05; // 덩굴마다 조금씩 늦게 출발
+  const base = new THREE.CatmullRomCurve3(pts.map(([x, y]) => new THREE.Vector3(x, y, 0)));
+  // 1) 2D 경로를 촘촘히 샘플링하고, 각 점 앞뒤에 금속이 있는지 레이캐스트
+  const N = 200, xy = [], hit = [];
+  for (let i = 0; i <= N; i++){
+    const t = i / N, p = base.getPointAt(t), d = base.getTangentAt(t), w = 0.03 * Math.sin(t * 40 + vi);
+    xy.push([p.x - d.y * w, p.y + d.x * w]); hit.push(overMetal(...xy[i]));
+  }
+  // 2) 금속을 건널 때마다 뒤/앞을 번갈아 → 엮어 짠 모양. 첫 교차는 뒤(-1): 로고 뒤에서 시작
+  const side = []; let s = 1;
+  for (let i = 0; i <= N; i++){ if (hit[i] && (i === 0 || !hit[i - 1])) s = -s; side.push(hit[i] ? s : 0); }
+  // 3) 빈 구멍(금속 없음) 구간에서 앞/뒤를 부드럽게 전환
+  const prev = [], next = [];
+  for (let i = 0, p = -1; i <= N; i++){ if (side[i]) p = side[i]; prev.push(p); }
+  for (let i = N, n = 0; i >= 0; i--){ if (side[i]) n = side[i]; next[i] = n || prev[i]; }
+  const path = [];
+  for (let i = 0; i <= N; i++){
+    let z = side[i];
+    if (!z){
+      let a = i, b = i;
+      while (a > 0 && !side[a - 1]) a--;
+      while (b < N && !side[b + 1]) b++;
+      const f = smooth(0, 1, (i - a + 1) / (b - a + 2));
+      z = prev[i] + (next[i] - prev[i]) * (a === 0 ? 0 : f); // 시작부(첫 교차 전)는 계속 뒤쪽
+    }
+    path.push(new THREE.Vector3(xy[i][0], xy[i][1], z * DEPTH + 0.03 * Math.sin(i * 0.3)));
+  }
+  const curve = new THREE.CatmullRomCurve3(path), seg = 400, rad = 6;
+  const geo = new THREE.TubeGeometry(curve, seg, 0.02, rad, false);
+  eScene.add(new THREE.Mesh(geo, vineMat));
+  const centers = []; for (let i = 0; i <= seg; i++) centers.push(curve.getPointAt(i / seg)); // TubeGeometry 각 링의 중심
+  // drawRange로 앞에서부터 조금씩 보여 주고, 자라는 끝은 가늘게(taper)
+  vines.push({geo, start, seg, rad, curve, centers, orig: geo.attributes.position.array.slice(), r: -1});
+
+  for (let t = 0.03 + rnd() * 0.04; t < 0.98; t += 0.045 + rnd() * 0.04){
+    const p = curve.getPointAt(t), d = curve.getTangentAt(t), side = rnd() < 0.5 ? -1 : 1;
+    const m = new THREE.Mesh(ivyGeo, ivyMats[Math.floor(rnd() * 4)]);
+    m.position.set(p.x - d.y * 0.03 * side, p.y + d.x * 0.03 * side, p.z + 0.02);
+    m.rotation.set(-0.4 + rnd() * 0.6, -0.4 + rnd() * 0.8, Math.atan2(d.y, d.x) - Math.PI / 2 + side * (0.6 + rnd() * 0.9));
+    m.userData = {a: tipAt(start, t) + 0.01 + rnd() * 0.06, s: 0.2 + rnd() * 0.14, rz: m.rotation.z, ph: rnd() * 6};
+    m.scale.setScalar(1e-4); eScene.add(m); ivy.push(m);
+  }
+});
+
+// 꽃 배치: 모든 덩굴에서 '로고 앞' 지점을 후보로 모아 섞은 뒤, 이미 고른 꽃과 MIN_D 이상 떨어진 곳만 고른다
+// (덩굴별로 따로 뽑으면 앞으로 나온 짧은 구간에 여러 송이가 몰렸음)
+const FLOWER_MAX = 14, MIN_D = 0.6;
+const cand = [];
+vines.forEach(v => { for (let t = 0.2; t < 0.98; t += 0.01){ const p = v.curve.getPointAt(t); if (p.z > 0.12) cand.push({p, t, v}); } });
+for (let i = cand.length - 1; i > 0; i--){ const j = Math.floor(rnd() * (i + 1)); [cand[i], cand[j]] = [cand[j], cand[i]]; }
+for (const {p, t, v} of cand){
+  if (blooms.length >= FLOWER_MAX) break;
+  if (blooms.some(b => Math.hypot(b.pos.x - p.x, b.pos.y - p.y) < MIN_D)) continue;
+  blooms.push({
+    pos: p.clone().add(new THREE.Vector3(0, 0, 0.05)),
+    rot: new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2 + (rnd() - 0.5) * 0.8, 0, (rnd() - 0.5) * 0.8)), // 축(+Y)이 카메라 쪽
+    b: Math.max(0.55, tipAt(v.start, t)) + rnd() * 0.1, o: 0.8 + rnd() * 0.1, s: 0.2 + rnd() * 0.1,
+    kind: (blooms.length * 7 + 3) % FLOWER_PAL.length, // 종류는 고르게 섞이도록 번호로 (rnd를 더 쓰면 꽃 위치가 바뀜)
+    shade: Math.floor(rnd() * 3), // 그 종류 팔레트에서 몇 번째 색
+  });
+}
+const lilies = createLilies(THREE, mergeGeometries, blooms.length);
+eScene.add(lilies.group);
+
+// ───────── 나비 (butterfly.png 참고): 정원에 찾아오는 곤충 예시 ─────────
+// 오른쪽 날개 윤곽 (x: 몸통→바깥, y: 머리 쪽 +). 앞날개 + 꼬리 달린 뒷날개를 한 윤곽으로
+const WING = new THREE.SplineCurve([[0,0.1],[0.35,0.5],[0.75,0.62],[0.97,0.5],[0.86,0.2],[0.55,0.03],[0.72,-0.15],[0.66,-0.45],[0.44,-0.56],[0.38,-0.82],[0.3,-0.58],[0.12,-0.4],[0,-0.1]]
+  .map(([x, y]) => new THREE.Vector2(x, y))).getPoints(160);
+const wingV = y => (y + 0.85) / 1.5; // 날개 y → 텍스처 v
+const wingTex = (() => { // 호랑나비 무늬: 노란 바탕 + 검은 날개맥·테두리 + 테두리 반점 + 뒷날개 눈알 무늬
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const x = c.getContext('2d'), C = (px, py) => [px * 512, (1 - wingV(py)) * 512];
+  const outline = () => { x.beginPath(); WING.forEach((p, i) => i ? x.lineTo(...C(p.x, p.y)) : x.moveTo(...C(p.x, p.y))); x.closePath(); };
+  x.fillStyle = '#1a1410'; x.fillRect(0, 0, 512, 512);
+  x.save(); outline(); x.clip();
+  const g = x.createRadialGradient(...C(0, 0), 10, ...C(0, 0), 430);
+  g.addColorStop(0, '#2a1d10'); g.addColorStop(0.16, '#f5a312'); g.addColorStop(1, '#ffd23a');
+  x.fillStyle = g; x.fillRect(0, 0, 512, 512);
+  x.strokeStyle = 'rgba(30,20,10,0.85)'; x.lineWidth = 5;
+  for (let i = 0; i < WING.length; i += 10){ x.beginPath(); x.moveTo(...C(0, 0)); x.lineTo(...C(WING[i].x, WING[i].y)); x.stroke(); }
+  x.lineWidth = 46; x.strokeStyle = '#1a1410'; outline(); x.stroke();
+  x.fillStyle = '#ffe9a0';
+  for (let i = 4; i < WING.length; i += 9){ x.beginPath(); x.arc(...C(WING[i].x * 0.93, WING[i].y * 0.93), 6, 0, 7); x.fill(); }
+  for (const [r, col] of [[22, '#ff8a3d'], [13, '#3d6bff'], [5, '#111']]){ x.fillStyle = col; x.beginPath(); x.arc(...C(0.44, -0.47), r, 0, 7); x.fill(); }
+  x.restore();
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+const wingGeoR = (() => {
+  const g = new THREE.ShapeGeometry(new THREE.Shape(WING)), p = g.attributes.position, uv = g.attributes.uv;
+  for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i), wingV(p.getY(i)));
+  return g;
+})();
+const wingGeoL = wingGeoR.clone().scale(-1, 1, 1);
+// emissiveMap: 날개를 들어 빛을 등져도 무늬가 어둡게 죽지 않게
+const wingMat = new THREE.MeshStandardMaterial({map:wingTex, emissive:0xffffff, emissiveMap:wingTex, emissiveIntensity:0.35, side:THREE.DoubleSide, roughness:0.6});
+const bodyMat = new THREE.MeshStandardMaterial({color:0x2a2018, roughness:0.5});
+function makeButterfly(){ // 날개 길이 1 기준. 몸통은 +Y(머리) 방향, 등은 +Z
+  const g = new THREE.Group(), L = new THREE.Group(), R = new THREE.Group();
+  L.add(new THREE.Mesh(wingGeoL, wingMat)); R.add(new THREE.Mesh(wingGeoR, wingMat));
+  const seg = (r, sy, y) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), bodyMat); m.scale.y = sy; m.position.y = y; return m; };
+  g.add(L, R, seg(0.07, 1, 0.27), seg(0.09, 1.4, 0.08), seg(0.06, 4.5, -0.25)); // 머리·가슴·배
+  for (const s of [-1, 1]){ // 더듬이 + 끝의 곤봉
+    const V = THREE.Vector3;
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.QuadraticBezierCurve3(new V(0, 0.3, 0), new V(s * 0.05, 0.5, 0.05), new V(s * 0.16, 0.62, 0.02)), 8, 0.008, 4), bodyMat));
+    const tip = seg(0.022, 1.5, 0.62); tip.position.x = s * 0.16; g.add(tip);
+  }
+  return {g, L, R};
+}
+const PERCH = new THREE.Vector3(0, 0, 0.1); // 꽃 바로 앞에 앉음
+const bflies = [0, 1, 2].map(i => {
+  const b = makeButterfly();
+  b.g.rotation.x = -0.35; b.g.scale.setScalar(1e-4); b.g.visible = false; eScene.add(b.g);
+  return Object.assign(b, {i, vis: 0, mode: 'perch', at: (i * 5) % Math.max(1, blooms.length), rz: (rnd() - 0.5) * 1.2,
+    from: new THREE.Vector3(), to: new THREE.Vector3(), ctrl: new THREE.Vector3(), t0: 0, dur: 2.6, until: 1 + i * 1.5, legs: 0, land: true}); // 켜면 곧 한 마리씩 날기 시작
+});
+const BZ = new THREE.Vector3();
+// 다음 비행 시작: 꽃에 내려앉거나, 로고 주변 허공을 몇 구간 날아다님
+// 앉을 수 있는 꽃: 지금 성장도에서 피어 있는 꽃 (봉오리가 반 이상 자란 것)
+const isOpen = j => smooth(blooms[j].b, blooms[j].b + 0.1, egNow) > 0.5;
+function startFlight(b, t, driving){
+  const open = blooms.map((_, j) => j).filter(j => isOpen(j) && j !== b.at);
+  if (!open.length && isOpen(b.at)) open.push(b.at);
+  b.land = open.length > 0 && (b.legs >= 3 || Math.random() < 0.4); // 허공을 최대 3구간 날다가 꽃에 앉음, 꽃이 없으면 계속 날아다님
+  b.from.copy(b.g.position);
+  if (b.land){
+    const j = open[Math.floor(Math.random() * open.length)];
+    b.at = j; b.legs = 0; b.to.copy(blooms[j].pos).add(PERCH);
+  } else { // 엠블럼(가로 ±2, 세로 ±1.1) 주변 앞쪽 허공의 아무 점
+    b.legs++; b.to.set((Math.random() * 2 - 1) * 2.4, (Math.random() * 2 - 1) * 1.35, 0.35 + Math.random() * 0.5);
+  }
+  b.ctrl.copy(b.from).add(b.to).multiplyScalar(0.5).add(BZ.set((Math.random() - 0.5) * 1.2, (Math.random() - 0.5) * 1.0, 0.3 + Math.random() * 0.3));
+  b.dur = Math.max(1.2, b.from.distanceTo(b.to) * 1.1) * (driving ? 2.3 : 1); // 거리에 비례, 주행 중엔 느긋하게
+  b.t0 = t; b.mode = 'fly';
+}
+function updateButterflies(t){
+  const on = $('bfly').checked, driving = !(S.state === 'park' || S.state === 'charge');
+  for (const b of bflies){
+    b.vis += ((on ? 1 : 0) - b.vis) * 0.04;
+    b.g.visible = b.vis > 0.01;
+    if (!b.g.visible || !blooms.length) continue;
+    b.g.scale.setScalar(0.18 * b.vis);
+    let flap;
+    if (b.mode === 'perch'){
+      b.g.position.copy(blooms[b.at].pos).add(PERCH);
+      b.g.rotation.z = b.rz;
+      flap = 0.3 + 0.25 * Math.sin(t * 1.3 + b.i * 2); // 앉아서 날개를 천천히 여닫음
+      if (t > b.until || !isOpen(b.at)) startFlight(b, t, driving); // 쉬었다가 다시 날아오름 (주행 중엔 더 오래 쉼), 꽃이 지면 바로
+    } else {
+      const k = Math.min(1, (t - b.t0) / b.dur), u = 1 - k;
+      b.g.position.set(0, 0, 0).addScaledVector(b.from, u * u).addScaledVector(b.ctrl, 2 * u * k).addScaledVector(b.to, k * k);
+      const dx = 2 * u * (b.ctrl.x - b.from.x) + 2 * k * (b.to.x - b.ctrl.x), dy = 2 * u * (b.ctrl.y - b.from.y) + 2 * k * (b.to.y - b.ctrl.y);
+      b.g.rotation.z = Math.atan2(dy, dx) - Math.PI / 2;
+      flap = 0.15 + 1.0 * Math.abs(Math.sin(t * (driving ? 6 : 15) + b.i)); // 날갯짓 (주행 중엔 느긋하게)
+      if (k >= 1){
+        if (b.land){ b.mode = 'perch'; b.until = t + (driving ? 6 + Math.random() * 6 : 2 + Math.random() * 4); b.rz = (Math.random() - 0.5) * 1.2; }
+        else startFlight(b, t, driving); // 허공 구간 끝: 이어서 계속 날아감
+      }
+    }
+    b.L.rotation.y = flap; b.R.rotation.y = -flap;
+  }
+}
+
+// 디버그: 꽃 한 송이만 크게 보는 화면 (개화 정도 = 엠블럼 성장 슬라이더)
+const fScene = new THREE.Scene();
+fScene.environment = scene.environment;
+fScene.add(new THREE.DirectionalLight(0xffffff, 1.5), new THREE.HemisphereLight(0xffffff, 0x334433, 0.6));
+const fCam = new THREE.PerspectiveCamera(35, 16/9, 0.05, 50);
+fCam.position.set(0.7, 2.3, 3.6); fCam.lookAt(0.7, 0.25, 0); // 꽃(원점)과 잎(x 1.5) 사이를 가운데로
+const lily1 = createLilies(THREE, mergeGeometries, 1);
+fScene.add(lily1.group);
+const leaf1 = new THREE.Mesh(ivyGeo, ivyMats[0]); // 잎 모델도 옆에 크게
+leaf1.position.set(1.5, 0, 0.3); leaf1.rotation.set(-0.5, -0.3, 0.2); leaf1.scale.setScalar(1.3);
+fScene.add(leaf1);
+const bf1 = makeButterfly(); // 나비 모델도 함께
+bf1.g.position.set(0.7, 1.2, 0.6); bf1.g.rotation.set(-0.6, 0, 0.3); bf1.g.scale.setScalar(0.55);
+fScene.add(bf1.g);
+const M4 = new THREE.Matrix4(), V3 = new THREE.Vector3();
+
+let egNow = 0, egDrag = false;
+function updateEmblem(t){
+  egNow += Math.max(-0.003, Math.min(0.003, S.eg - egNow)); // 목표로 천천히 다가감: 한 번에 확 바뀌지 않음
+  const g = egNow;
+  vines.forEach(v => {
+    const r = Math.min(1, Math.max(0, (g - v.start) / VINE_SPAN)) ** VINE_EASE;
+    if (r === v.r) return; // 성장도가 바뀔 때만 다시 계산
+    v.r = r;
+    const tip = r * v.seg, a = v.geo.attributes.position.array, o = v.orig, TAPER = 45; // 끝에서 45링(약 0.45) 동안 가늘어짐
+    for (let i = 0; i <= v.seg; i++){
+      const f = Math.max(0.06, Math.min(1, (tip - i) / TAPER)) ** 0.6, c = v.centers[i];
+      for (let j = 0; j <= v.rad; j++){
+        const n = (i * (v.rad + 1) + j) * 3;
+        a[n] = c.x + (o[n] - c.x) * f; a[n + 1] = c.y + (o[n + 1] - c.y) * f; a[n + 2] = c.z + (o[n + 2] - c.z) * f;
+      }
+    }
+    v.geo.attributes.position.needsUpdate = true;
+    v.geo.setDrawRange(0, Math.ceil(tip) * v.rad * 6);
+  });
+  ivy.forEach(m => {
+    const u = m.userData;
+    m.scale.setScalar(Math.max(1e-4, u.s * smooth(u.a, u.a + 0.08, g) * (1 - 0.15 * wiltNow)));
+    m.rotation.z = u.rz + 0.04 * Math.sin(t * 0.6 + u.ph) - wiltNow * 0.4; // 미세하게 흔들리고, 급가감속엔 움츠림
+  });
+  blooms.forEach((f, i) => {
+    const o = smooth(f.o, f.o + 0.12, g), s = f.s * smooth(f.b, f.b + 0.1, g) * (0.55 + 0.45 * o); // 봉오리는 작게, 피면서 커짐
+    lilies.set(i, M4.compose(f.pos, f.rot, V3.setScalar(Math.max(1e-4, s * (1 - 0.2 * wiltNow)))), o * (1 - 0.4 * wiltNow), FLOWER_PAL[f.kind][f.shade], f.kind);
+  });
+  lilies.commit();
+  ivyMats.forEach((m, i) => m.color.copy(LEAF_C[i]).lerp(WILT_C, wiltNow * 0.6));
+  // 디버그 꽃: 천천히 돌면서 개화 정도 확인
+  const fk = q.has('kind') ? +q.get('kind') : Math.floor(t / 4) % FLOWER_PAL.length; // 4초마다 다음 종류 (#kind=번호로 고정)
+  lily1.set(0, M4.makeRotationY(t * 0.3), g, FLOWER_PAL[fk][0], fk);
+  lily1.commit();
+}
+
+// ───────── 충전 중 꾸미기: 정원 배경·소품 (물방울로 해금하는 건 향후) ─────────
+const THEMES = [
+  {name: '기본 정원', bg: '#050505'},
+  {name: '별빛 정원', bg: 'radial-gradient(ellipse at 50% 120%, #1b2a4a, #05070d 70%)', fx: 'stars'},
+  {name: '숲속 정원', bg: 'radial-gradient(ellipse at 50% 115%, #1d3a22, #040905 70%)', fx: 'fireflies'},
+  {name: '연못 정원', bg: 'linear-gradient(#050a0f 55%, #0b2230)', fx: 'ripples'},
+  {name: '벚꽃 정원', bg: 'radial-gradient(ellipse at 50% 120%, #3a1d2a, #0a0507 70%)', fx: 'petals'},
+];
+const deco = $('deco'), dctx = deco.getContext('2d');
+const motes = Array.from({length: 60}, () => ({x: Math.random(), y: Math.random(), r: Math.random(), p: Math.random() * 6}));
+new ResizeObserver(() => { const d = Math.min(devicePixelRatio, 2); deco.width = deco.clientWidth * d; deco.height = deco.clientHeight * d; }).observe(deco);
+function drawDeco(t, dt){
+  const W = deco.width, H = deco.height, kind = $('view').value === 'emblem' && THEMES[S.theme].fx;
+  dctx.clearRect(0, 0, W, H);
+  if (!kind) return;
+  const full = S.state === 'park' || S.state === 'charge', sp = full ? 1 : 0.3; // 주행 중엔 느리고 은은하게
+  dctx.globalAlpha = full ? 1 : 0.6;
+  for (const m of motes){
+    if (kind === 'stars'){ // 제자리에서 천천히 반짝임
+      dctx.fillStyle = `rgba(255,255,255,${0.25 + 0.5 * (0.5 + 0.5 * Math.sin(t * 0.8 + m.p))})`;
+      dctx.beginPath(); dctx.arc(m.x * W, m.y * 0.75 * H, (0.6 + m.r) * H / 900, 0, Math.PI * 2); dctx.fill();
+    } else if (kind === 'fireflies'){ // 정원 둘레를 느리게 떠다니며 깜빡임
+      const x = (m.x + 0.03 * Math.sin(t * 0.3 * sp + m.p)) * W, y = (0.35 + 0.6 * m.y + 0.03 * Math.cos(t * 0.25 * sp + m.p * 2)) * H;
+      const g = dctx.createRadialGradient(x, y, 0, x, y, H / 90);
+      g.addColorStop(0, `rgba(220,255,140,${0.9 * (0.5 + 0.5 * Math.sin(t * 1.2 * sp + m.p))})`); g.addColorStop(1, 'rgba(220,255,140,0)');
+      dctx.fillStyle = g; dctx.beginPath(); dctx.arc(x, y, H / 90, 0, Math.PI * 2); dctx.fill();
+    } else if (kind === 'ripples' && m.r < 0.12){ // 아래쪽 수면에 퍼지는 물결
+      const k = (t * 0.15 * sp + m.p) % 1;
+      dctx.strokeStyle = `rgba(150,210,255,${0.35 * (1 - k)})`; dctx.lineWidth = H / 700;
+      dctx.beginPath(); dctx.ellipse(m.x * W, (0.8 + 0.18 * m.y) * H, k * H / 6, k * H / 30, 0, 0, Math.PI * 2); dctx.stroke();
+    } else if (kind === 'petals'){ // 천천히 흔들리며 떨어지는 꽃잎
+      m.y += dt * 0.03 * sp * (0.6 + m.r); if (m.y > 1.05){ m.y -= 1.1; m.x = Math.random(); }
+      const x = (m.x + 0.02 * Math.sin(t * 0.6 * sp + m.p)) * W, y = m.y * H;
+      dctx.fillStyle = 'rgba(255,190,210,.75)';
+      dctx.beginPath(); dctx.ellipse(x, y, H / 160, H / 300, t * 0.5 * sp + m.p, 0, Math.PI * 2); dctx.fill();
+    }
+  }
+}
+
+// ───────── 비·눈 애니메이션 (2D 캔버스 오버레이) ─────────
+const fx = $('fx'), fctx = fx.getContext('2d');
+const flakes = Array.from({length: 180}, () => ({x: Math.random(), y: Math.random(), v: 0.6 + Math.random() * 0.6, r: Math.random()}));
+new ResizeObserver(() => { const d = Math.min(devicePixelRatio, 2); fx.width = fx.clientWidth * d; fx.height = fx.clientHeight * d; }).observe(fx);
+function drawWeather(t, dt){
+  const w = $('weather').value, rain = w === '비' || $('wiper').checked, snow = w === '눈';
+  const W = fx.width, H = fx.height;
+  fctx.clearRect(0, 0, W, H);
+  if (!rain && !snow) return;
+  fctx.globalAlpha = S.state === 'park' || S.state === 'charge' ? 1 : 0.6; // 주행 중엔 더 은은하게
+  fctx.beginPath();
+  for (const p of flakes){
+    if (snow){
+      p.y += dt * 0.07 * p.v; p.x += dt * 0.03 * Math.sin(t * 0.8 + p.r * 12); // 천천히 흔들리며 내림
+      const s = (1 + 2 * p.r) * H / 500;
+      fctx.moveTo(p.x * W + s, p.y * H); fctx.arc(p.x * W, p.y * H, s, 0, Math.PI * 2);
+    } else {
+      p.y += dt * 1.3 * p.v; p.x -= dt * 0.2 * p.v; // 빠르게, 살짝 비스듬히
+      fctx.moveTo(p.x * W, p.y * H); fctx.lineTo((p.x + 0.004) * W, (p.y - 0.035 * p.v) * H);
+    }
+    if (p.y > 1.05){ p.y -= 1.1; p.x = Math.random(); }
+    if (p.x < -0.05) p.x += 1.1; else if (p.x > 1.05) p.x -= 1.1;
+  }
+  if (snow){ fctx.fillStyle = 'rgba(255,255,255,.85)'; fctx.fill(); }
+  else { fctx.strokeStyle = 'rgba(190,215,255,.5)'; fctx.lineWidth = H / 600; fctx.stroke(); }
+}
+
+const clock = new THREE.Clock();
+let lastT = 0;
+renderer.setAnimationLoop(() => {
+  const t = clock.getElapsedTime();
+  drawWeather(t, Math.min(0.05, t - lastT)); drawDeco(t, Math.min(0.05, t - lastT)); lastT = t;
+  wiltNow += (S.wilt - wiltNow) * 0.015; // 천천히 처지고 천천히 회복
+  pivots.forEach((pv, i) => {
+    const sway = 1.2 * Math.sin(t * 0.7 + i * 1.7); // 아주 미세한 흔들림 (주행 중 급격한 애니메이션 없음)
+    pv.rotation.z = -THREE.MathUtils.degToRad(pv.userData.tilt + wiltNow * 65 + sway);
+  });
+  updateEmblem(t);
+  updateButterflies(t);
+  const f = 0.3 + 0.35 * Math.sin(t * 1.5); bf1.L.rotation.y = f; bf1.R.rotation.y = -f; // 디버그 화면 나비
+  // 모든 상태에서 엠블럼 정원. 기존 화분은 시뮬레이터의 디버그 선택으로만
+  const view = $('view').value;
+  if (view === 'pot'){ controls.update(); renderer.render(scene, camera); }
+  else if (view === 'flower') renderer.render(fScene, fCam);
+  else renderer.render(eScene, eCam);
+});
+
+function render(){
+  const st = S.state, full = (st === 'park' || st === 'charge') && !S.restricted, w = $('weather').value;
+  const sc = $('screen');
+  sc.className = (full ? 'full ' : 'ambient ') + st;
+  const pot = $('view').value === 'pot';
+  sc.style.background = pot ? BG[w] : THEMES[S.theme].bg;
+  sc.style.filter = full ? '' : 'brightness(.85)'; // 주행 중엔 은은하게
+  $('sky').innerHTML = SKY[w];
+
+  // 정원 구조가 바뀔 때만 3D 모델을 다시 만든다 (잎 처짐은 애니메이션 루프가 처리)
+  const key = JSON.stringify([S.plants.map(p => p.growth.toFixed(2)), S.extras, S.pot]);
+  if (key !== S.gardenKey){ S.gardenKey = key; buildGarden(); }
+  controls.enabled = full && pot;
+
+  $('ambientIcons').innerHTML = DROP.repeat(Math.min(5, Math.ceil(S.drops / 5))); // 숫자 없이 아이콘만
+  $('hud').innerHTML = `<span>${LABEL[st]}</span><span>${DROP} ${S.drops} · 오늘 급가감속 ${S.harsh}회</span>`;
+  $('badge').textContent = LABEL[st];
+  $('speedVal').textContent = $('speed').value;
+  if (!egDrag) $('eg').value = S.eg;
+  $('egVal').textContent = Math.round(S.eg * 100) + '%';
+  $('pending').textContent = S.queue.length;
+  for (const [id, k] of DBG_VARS) if (document.activeElement !== $(id)) $(id).value = +S[k].toFixed(2);
+  if (document.activeElement !== $('vStreak')) $('vStreak').value = safeStreak();
+}
+const DBG_VARS = [['vDrops', 'drops'], ['vHarsh', 'harsh'], ['vWilt', 'wilt']];
+
+// 1초마다 차량 데이터 샘플링
+setInterval(() => {
+  const sp = $('speed');
+  if ($('auto').checked && $('gear').value !== 'P' && !$('pbrake').checked){
+    const v = +sp.value || 10;
+    sp.value = Math.max(20, Math.min(80, v + Math.round(Math.random() * 6 - 3)));
+  }
+  const v = +sp.value, dv = v - S.lastSpeed, today = dayKey();
+  S.lastSpeed = v;
+  if (S.today !== today){ S.today = today; S.harsh = 0; } // 급가감속 횟수는 하루 단위
+
+  if (Math.abs(dv) >= 12){ // ponytail: 1초 12km/h 고정 임계값, 실차 데이터로 보정 필요
+    S.harsh++; S.tripHarsh++; S.days[today] = (S.days[today] || 0) + 1; S.wilt = Math.min(1, S.wilt + 0.3); S.eg = Math.max(0, S.eg - 0.03);
+    log(dv > 0 ? '급가속 → 잎이 처짐' : '급제동 → 잎이 처짐');
+  } else if (v > 0){
+    S.smoothTicks++;
+    S.days[today] ??= 0; // 오늘 운전함
+    for (const k of Object.keys(S.days).sort().slice(0, -30)) delete S.days[k]; // 최근 30일만 보관
+    S.eg = Math.min(1, S.eg + 0.004); // ponytail: 부드러운 1초당 +0.4%, 실제 서비스는 주행 거리 기준으로 조정
+    if (S.smoothTicks % 3 === 0){ S.drops++; S.tripDrops++; }
+    if (dv <= -2 && $('regen').checked){ S.drops++; S.tripDrops++; log('회생제동 보너스 💧'); }
+    S.wilt = Math.max(0, S.wilt - 0.03);
+  }
+
+  if (($('weather').value === '비' || $('wiper').checked) && !S.rainDone){
+    S.rainDone = true; S.extras.push('🍄');
+    say('비가 와서 정원이 촉촉해졌어요.');
+  }
+
+  // 나비: 일주일 연속 안전운전이면 찾아오고, 급가감속이 생기면 떠남
+  const visit = safeStreak() >= 7;
+  if (!$('manual').checked && visit !== $('bfly').checked){
+    $('bfly').checked = visit;
+    if (visit) say('일주일 동안 안전하게 달려 주셔서 나비가 정원에 놀러 왔어요!');
+  }
+
+  setState(vehicleState());
+  render();
+  save();
+}, 1000);
+
+// 시뮬레이터 입력
+document.querySelectorAll('[data-dv]').forEach(b => b.onclick = () => {
+  $('auto').checked = false;
+  $('speed').value = Math.max(0, +$('speed').value + +b.dataset.dv);
+});
+$('eg').oninput = () => { S.eg = +$('eg').value; render(); };
+$('eg').addEventListener('pointerdown', () => egDrag = true);
+addEventListener('pointerup', () => egDrag = false);
+$('view').onchange = render;
+$('bfly').onchange = () => { if ($('bfly').checked) say('일주일 동안 안전하게 달려 주셔서 나비가 정원에 놀러 왔어요!'); };
+$('gear').onchange = () => { if ($('gear').value === 'P') $('speed').value = 0; };
+
+// 디버그 패널: 내부 변수 직접 수정. 패널을 만지면 수동 조작으로 바뀌어 차량 값이 덮어쓰지 않는다
+for (const [id, k] of DBG_VARS) $(id).oninput = () => { S[k] = +$(id).value || 0; render(); };
+$('vStreak').oninput = () => { setStreak(+$('vStreak').value || 0); render(); };
+const toManual = e => { if (e.target.id !== 'manual') $('manual').checked = true; };
+$('sim').addEventListener('input', toManual);
+$('sim').addEventListener('click', e => { if (e.target.dataset.dv) toManual(e); });
+$('dbgBtn').onclick = () => document.body.classList.toggle('dbg-open');
+
+// 앱(WebView)에서 Kotlin이 차량 값을 넣는다:
+// roadGarden.vehicle({speed: km/h, gear: 'P'|'D'|'N'|'R', brake, pbrake, charging, wiper, regen, weather: '맑음'|'흐림'|'비'|'눈', temp, restricted})
+window.roadGarden = {
+  vehicle(v){
+    if ('restricted' in v) S.restricted = !!v.restricted; // 주행 중 제한은 수동 조작 중에도 따름
+    if ($('manual').checked) return;
+    if ('speed' in v){ $('auto').checked = false; $('speed').value = Math.round(v.speed); }
+    if ('gear' in v) $('gear').value = v.gear;
+    if ('weather' in v) $('weather').value = v.weather;
+    if ('temp' in v) $('temp').value = Math.round(v.temp);
+    for (const id of ['brake', 'pbrake', 'charging', 'wiper', 'regen']) if (id in v) $(id).checked = !!v[id];
+  },
+  spoken(id){ const f = ttsDone[id]; delete ttsDone[id]; f && f(); }, // Android TTS 발화 끝
+};
+
+// 충전 중 조작
+$('decor').onclick = () => { S.theme = (S.theme + 1) % THEMES.length; say(`${THEMES[S.theme].name}으로 꾸몄어요!`); render(); };
+
+// 데모·스크린샷용: prototype.html#gear=P&grow=0.8&weather=비 처럼 상황을 바로 연다
+const q = new URLSearchParams(location.hash.slice(1));
+if (!['eg', 'drops', 'harsh', 'wilt'].some(k => q.has(k))) load();
+egNow = S.eg; wiltNow = S.wilt;
+$('bfly').checked = safeStreak() >= 7; // 이미 찾아온 나비는 시작할 때 다시 인사하지 않음
+for (const id of ['view', 'speed', 'gear', 'weather', 'temp']) if (q.has(id)) $(id).value = q.get(id);
+for (const id of ['brake', 'pbrake', 'charging', 'wiper', 'bfly']) if (q.has(id)) $(id).checked = q.get(id) === '1';
+S.lastSpeed = +$('speed').value;
+if (q.has('grow')) S.plants[0].growth = +q.get('grow');
+if (q.has('wilt')) S.wilt = wiltNow = +q.get('wilt');
+for (const k of ['drops', 'pot', 'harsh', 'theme']) if (q.has(k)) S[k] = +q.get(k);
+if (q.has('eg')) S.eg = egNow = +q.get('eg');
+if (q.has('bfly')) bflies.forEach(b => b.vis = 1); // 주소로 열면 처음부터 다 나타난 상태
+
+setState(vehicleState());
+render();
+if (q.has('kind')){ leaf1.visible = false; bf1.g.visible = false; } // 꽃 종류 단독 보기 (스크린샷용)
+if (q.has('demo')) document.body.classList.add('demo');
+if (q.has('debug')) document.body.classList.add('debug');
+if (q.has('sub')){ S.speaking = 'demo'; $('subtitle').textContent = q.get('sub'); } // 자막 고정 (음성 없이)
+</script>
+</body>
+</html>
